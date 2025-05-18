@@ -11,6 +11,17 @@ ifeq ($(OPT),1)
 	CFLAGS += -DMLK_CONFIG_USE_NATIVE_BACKEND_ARITH -DMLK_CONFIG_USE_NATIVE_BACKEND_FIPS202
 endif
 
+#	experimental risc-v builds
+ifeq ($(OPT),5)
+	SOURCES += $(wildcard mlkem/native/riscv64/src/*.[csS])
+	FIPS202_SRCS += $(wildcard mlkem/fips202/native/riscv64/src/*.c)
+	CFLAGS += -DMLK_CONFIG_USE_NATIVE_BACKEND_ARITH
+	# enables Keccak instruction
+	#CFLAGS += -DMLK_SYS_RISCV64_KECCAK_INST -DMLK_CONFIG_USE_NATIVE_BACKEND_FIPS202
+	CFLAGS += -march=rv64gcv_zbb_zvbb_zvl256b
+	LDFLAGS += -static
+endif
+
 ALL_TESTS = test_mlkem acvp_mlkem bench_mlkem bench_components_mlkem gen_NISTKAT gen_KAT
 NON_NIST_TESTS = $(filter-out gen_NISTKAT,$(ALL_TESTS))
 

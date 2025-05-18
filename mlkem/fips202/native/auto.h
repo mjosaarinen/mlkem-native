@@ -19,4 +19,8 @@
 #include "x86_64/xkcp.h"
 #endif
 
+#if defined(MLK_SYS_RISCV64_KECCAK_INST)
+#include "riscv64/keccak_inst.h"
+#endif
+
 #endif /* !MLK_FIPS202_NATIVE_AUTO_H */
