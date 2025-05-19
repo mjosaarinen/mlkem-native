@@ -244,6 +244,9 @@ let MLKEM_POLY_TOBYTES_CORRECT = prove
   REWRITE_TAC[GSYM REAL_OF_NUM_CLAUSES] THEN
   ABBREV_TAC `twae = &2:real` THEN REAL_ARITH_TAC);;
 
+(* NOTE: This must be kept in sync with the CBMC specification
+ * in mlkem/native/aarch64/src/arith_native_aarch64.h *)
+
 let MLKEM_POLY_TOBYTES_SUBROUTINE_CORRECT = prove
  (`!r a (l:int16 list) pc returnaddress.
         ALL (nonoverlapping (r,384)) [(word pc,0x158); (a,512)]
