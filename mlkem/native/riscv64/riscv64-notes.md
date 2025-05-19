@@ -8,7 +8,7 @@ Experimental flags are enabled with `OPT=5` in development phase.
 
 Only the most rudimentary testing done:
 ```
-make CROSS_PREFIX=riscv64-unknown-linux-gnu- CC=riscv64-unknown-linux-gnu-gcc OPT=5
+make CROSS_PREFIX=riscv64-unknown-linux-gnu- CC=riscv64-unknown-linux-gnu-gcc LDFLAGS=-static
 
 spike --isa=rv64gcv_zbb_zvbb_zvl256b_zicntr_zihpm pk -p test/build/mlkem512/bin/gen_NISTKAT512  | sha256sum
 

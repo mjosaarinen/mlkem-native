@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT
  */
 
-//	=== Kyber NTT using RISC-V Vector intrinstics
+/*  === Kyber NTT using RISC-V Vector intrinstics */
 
 #include "../../../common.h"
 
@@ -11,78 +11,39 @@
 
 #include <riscv_vector.h>
 #include "arith_native_riscv64.h"
-
-//	settings
-// #define MLK_RVV_WIDENING_MUL
-
-#ifndef MLK_RVV_VLEN
-#define MLK_RVV_VLEN 256
-#endif
-
-// #define MLK_RVV_16M1_VL __riscv_vsetvlmax_e16m1()
-#define MLK_RVV_E16M1_VL (MLK_RVV_VLEN / 16)
-
-//	Montgomery reduction
-//	let t = (rh << 16) + rl Result is congurent to (t * R^-1) % q
-//	when t is in [-2038464511, 2038402304]	(31 signed bits ok)
-//	Will reduce to
-//   [-q,q]	 from z in [-109084671, 109088000]
-//	 [-2q,2q] from z in [-327254015, 327257344]
-//   [-3q,3q] from z in [-545423359, 545426688]
-
-/*
-n	= 256
-q	= 3329
-r	= 2^16
-r1	= lift(Mod(r, q))
-r2	= lift(Mod(r, q)^2)
-ri	= lift(Mod(r, q)^-1)
-qi	= lift(Mod(-q, r)^-1)
-r*ri - q*qi == 1
-g	= 17
-gi	= lift(Mod(g, q)^-1)
-in	= lift(Mod(n / 2, q)^-1)
-nr	= (in * r^2) % q
-*/
-
-#define MLKEM_QI 3327
-#define MLK_MONT_R1 2285
-#define MLK_MONT_R2 1353
-#define MLK_MONT_NR 1441
+#include "rv64v_settings.h"
 
 #ifndef MLK_RVV_WIDENING_MUL
-
 static inline vint16m1_t fq_redc(vint16m1_t rh, vint16m1_t rl, size_t vl)
 {
   vint16m1_t t;
   vbool16_t c;
 
-  t = __riscv_vmul_vx_i16m1(rl, MLKEM_QI, vl);  // t = l * -Q^-1
-  t = __riscv_vmulh_vx_i16m1(t, MLKEM_Q, vl);   // t = (t*Q) / R
-  c = __riscv_vmsne_vx_i16m1_b16(rl, 0, vl);    // c = l == 0
-  t = __riscv_vadc_vvm_i16m1(t, rh, c, vl);     // t += h + c
+  t = __riscv_vmul_vx_i16m1(rl, MLKEM_QI, vl); /* t = l * -Q^-1  */
+  t = __riscv_vmulh_vx_i16m1(t, MLKEM_Q, vl);  /* t = (t*Q) / R  */
+  c = __riscv_vmsne_vx_i16m1_b16(rl, 0, vl);   /* c = l == 0     */
+  t = __riscv_vadc_vvm_i16m1(t, rh, c, vl);    /* t += h + c     */
 
   return t;
 }
+#endif /* !MLK_RVV_WIDENING_MUL */
 
-#endif
-
-//	Narrowing reduction
+/*  Narrowing reduction */
 
 static inline vint16m1_t fq_redc2(vint32m2_t z, size_t vl)
 {
   vint16m1_t t;
 
   t = __riscv_vmul_vx_i16m1(__riscv_vncvt_x_x_w_i16m1(z, vl), MLKEM_QI,
-                            vl);  //	t = l * -Q^-1
+                            vl); /*    t = l * -Q^-1 */
   z = __riscv_vadd_vv_i32m2(z, __riscv_vwmul_vx_i32m2(t, MLKEM_Q, vl),
-                            vl);  //	x = (x + (t*Q))
+                            vl); /*    x = (x + (t*Q)) */
   t = __riscv_vnsra_wx_i16m1(z, 16, vl);
 
   return t;
 }
 
-//	Narrowing Barrett (per original Kyber)
+/*  Narrowing Barrett (per original Kyber)  */
 
 static inline vint16m1_t fq_barrett(vint16m1_t a, size_t vl)
 {
@@ -98,66 +59,66 @@ static inline vint16m1_t fq_barrett(vint16m1_t a, size_t vl)
   return t;
 }
 
-//	Conditionally add Q (if negative)
+/*  Conditionally add Q (if negative) */
 
 static inline vint16m1_t fq_cadd(vint16m1_t rx, size_t vl)
 {
   vbool16_t bn;
 
-  bn = __riscv_vmslt_vx_i16m1_b16(rx, 0, vl);              //	if x < 0:
-  rx = __riscv_vadd_vx_i16m1_mu(bn, rx, rx, MLKEM_Q, vl);  //	  x += Q
+  bn = __riscv_vmslt_vx_i16m1_b16(rx, 0, vl);             /*   if x < 0:   */
+  rx = __riscv_vadd_vx_i16m1_mu(bn, rx, rx, MLKEM_Q, vl); /*     x += Q    */
   return rx;
 }
 
-//	Conditionally subtract Q (if Q or above)
+/*  Conditionally subtract Q (if Q or above) */
 
 static inline vint16m1_t fq_csub(vint16m1_t rx, size_t vl)
 {
   vbool16_t bn;
 
-  bn = __riscv_vmsge_vx_i16m1_b16(rx, MLKEM_Q, vl);        //	if x >= 0:
-  rx = __riscv_vsub_vx_i16m1_mu(bn, rx, rx, MLKEM_Q, vl);  //	  x -= Q
+  bn = __riscv_vmsge_vx_i16m1_b16(rx, MLKEM_Q, vl);       /*   if x >= 0:  */
+  rx = __riscv_vsub_vx_i16m1_mu(bn, rx, rx, MLKEM_Q, vl); /*     x -= Q    */
   return rx;
 }
 
-//	Montgomery multiply: vector-vector
+/*  Montgomery multiply: vector-vector  */
 
 static inline vint16m1_t fq_mul_vv(vint16m1_t rx, vint16m1_t ry, size_t vl)
 {
 #ifndef MLK_RVV_WIDENING_MUL
   vint16m1_t rl, rh;
 
-  rh = __riscv_vmulh_vv_i16m1(rx, ry, vl);  //	h = (x * y) / R
-  rl = __riscv_vmul_vv_i16m1(rx, ry, vl);   //	l = (x * y) % R
+  rh = __riscv_vmulh_vv_i16m1(rx, ry, vl); /*  h = (x * y) / R */
+  rl = __riscv_vmul_vv_i16m1(rx, ry, vl);  /*  l = (x * y) % R */
   return fq_redc(rh, rl, vl);
-#else
+#else  /* !MLK_RVV_WIDENING_MUL */
   return fq_redc2(__riscv_vwmul_vv_i32m2(rx, ry, vl), vl);
-#endif
+#endif /* MLK_RVV_WIDENING_MUL */
 }
 
-//	Montgomery multiply: vector-scalar
+/*  Montgomery multiply: vector-scalar  */
 
 static inline vint16m1_t fq_mul_vx(vint16m1_t rx, int16_t ry, size_t vl)
 {
 #ifndef MLK_RVV_WIDENING_MUL
   vint16m1_t rl, rh;
 
-  rh = __riscv_vmulh_vx_i16m1(rx, ry, vl);  //	h = (x * y) / R
-  rl = __riscv_vmul_vx_i16m1(rx, ry, vl);   //	l = (x * y) % R
+  rh = __riscv_vmulh_vx_i16m1(rx, ry, vl); /*  h = (x * y) / R */
+  rl = __riscv_vmul_vx_i16m1(rx, ry, vl);  /*  l = (x * y) % R */
   return fq_redc(rh, rl, vl);
-#else
+#else  /* !MLK_RVV_WIDENING_MUL */
   return fq_redc2(__riscv_vwmul_vx_i32m2(rx, ry, vl), vl);
-#endif
+#endif /* MLK_RVV_WIDENING_MUL */
 }
 
-//	full normalization
+/*  full normalization  */
 
 static inline vint16m1_t fq_mulq_vx(vint16m1_t rx, int16_t ry, size_t vl)
 {
   return fq_cadd(fq_mul_vx(rx, ry, vl), vl);
 }
 
-//	create a permutation for swapping index bits a and b, a < b
+/*  create a permutation for swapping index bits a and b, a < b */
 
 static vuint16m2_t bitswap_perm(unsigned a, unsigned b, size_t vl)
 {
@@ -173,22 +134,22 @@ static vuint16m2_t bitswap_perm(unsigned a, unsigned b, size_t vl)
   return xa;
 }
 
-//	NOTE: NTT is currently fixed for vlen==256
+/*  NOTE: NTT is currently fixed for vlen==256  */
 
 #if (MLK_RVV_VLEN == 256)
 
 /*************************************************
- * Name:		poly_ntt
+ * Name:        poly_ntt
  *
  * Description: Computes negacyclic number-theoretic transform (NTT) of
- *				a polynomial in place;
- *				inputs assumed to be in normal order, output in
+ *              a polynomial in place;
+ *              inputs assumed to be in normal order, output in
  *bitreversed order
  *
- * Arguments:	- uint16_t *r: pointer to in/output polynomial
+ * Arguments:   - uint16_t *r: pointer to in/output polynomial
  **************************************************/
 
-//	forward butterfly operation
+/*  forward butterfly operation */
 
 #define MLK_RVV_BFLY_FX(u0, u1, ut, uc, vl) \
   {                                         \
@@ -206,14 +167,14 @@ static vuint16m2_t bitswap_perm(unsigned a, unsigned b, size_t vl)
 
 static vint16m2_t mlk_rv64v_ntt2(vint16m2_t vp, vint16m1_t cz)
 {
-  size_t vl = MLK_RVV_E16M1_VL;  //__riscv_vsetvlmax_e16m1();
+  size_t vl = MLK_RVV_E16M1_VL;
   size_t vl2 = 2 * vl;
 
   const vuint16m2_t v2p8 = bitswap_perm(3, 4, vl2);
   const vuint16m2_t v2p4 = bitswap_perm(2, 4, vl2);
   const vuint16m2_t v2p2 = bitswap_perm(1, 4, vl2);
 
-  //	p1 = p8(p4(p2))
+  /*    p1 = p8(p4(p2)) */
   const vuint16m2_t v2p1 = __riscv_vrgather_vv_u16m2(
       __riscv_vrgather_vv_u16m2(v2p2, v2p4, vl2), v2p8, vl2);
 
@@ -227,7 +188,7 @@ static vint16m2_t mlk_rv64v_ntt2(vint16m2_t vp, vint16m1_t cz)
 
   vint16m1_t vt, c0, t0, t1;
 
-  //	swap 8
+  /*    swap 8  */
   vp = __riscv_vrgatherei16_vv_i16m2(vp, v2p8, vl2);
   t0 = __riscv_vget_v_i16m2_i16m1(vp, 0);
   t1 = __riscv_vget_v_i16m2_i16m1(vp, 1);
@@ -235,7 +196,7 @@ static vint16m2_t mlk_rv64v_ntt2(vint16m2_t vp, vint16m1_t cz)
   c0 = __riscv_vrgather_vv_i16m1(cz, cs8, vl);
   MLK_RVV_BFLY_FV(t0, t1, vt, c0, vl);
 
-  //	swap 4
+  /*    swap 4  */
   vp = __riscv_vcreate_v_i16m1_i16m2(t0, t1);
   vp = __riscv_vrgatherei16_vv_i16m2(vp, v2p4, vl2);
   t0 = __riscv_vget_v_i16m2_i16m1(vp, 0);
@@ -244,7 +205,7 @@ static vint16m2_t mlk_rv64v_ntt2(vint16m2_t vp, vint16m1_t cz)
   c0 = __riscv_vrgather_vv_i16m1(cz, cs4, vl);
   MLK_RVV_BFLY_FV(t0, t1, vt, c0, vl);
 
-  //	swap 2
+  /*    swap 2  */
   vp = __riscv_vcreate_v_i16m1_i16m2(t0, t1);
   vp = __riscv_vrgatherei16_vv_i16m2(vp, v2p2, vl2);
   t0 = __riscv_vget_v_i16m2_i16m1(vp, 0);
@@ -253,11 +214,11 @@ static vint16m2_t mlk_rv64v_ntt2(vint16m2_t vp, vint16m1_t cz)
   c0 = __riscv_vrgather_vv_i16m1(cz, cs2, vl);
   MLK_RVV_BFLY_FV(t0, t1, vt, c0, vl);
 
-  //	normalize
+  /*    normalize   */
   t0 = fq_mulq_vx(t0, MLK_MONT_R1, vl);
   t1 = fq_mulq_vx(t1, MLK_MONT_R1, vl);
 
-  //	reorganize
+  /*    reorganize  */
   vp = __riscv_vcreate_v_i16m1_i16m2(t0, t1);
   vp = __riscv_vrgatherei16_vv_i16m2(vp, v2p1, vl2);
 
@@ -266,8 +227,9 @@ static vint16m2_t mlk_rv64v_ntt2(vint16m2_t vp, vint16m1_t cz)
 
 void mlk_rv64v_poly_ntt(int16_t *r)
 {
-  // zetas can be compiled into vector constants; don't pass as a pointer
-  const int16_t zeta[128] = {
+  /* zetas can be compiled into vector constants; don't pass as a pointer */
+  /* check-magic: off */
+  const int16_t zeta[0x80] = {
       -1044, -758,  573,   -1325, 1223,  652,   -552,  1015,  -1103, 430,
       555,   843,   -1251, 871,   1550,  105,   -359,  -1517, 264,   383,
       -1293, 1491,  -282,  -1544, 422,   587,   177,   -235,  -291,  -460,
@@ -282,6 +244,7 @@ void mlk_rv64v_poly_ntt(int16_t *r)
       -870,  478,   -1474, 1468,  -205,  -1571, 448,   -1065, 677,   -1275,
       -108,  -308,  996,   991,   958,   -1460, 1522,  1628,
   };
+  /* check-magic: on */
 
   size_t vl = MLK_RVV_E16M1_VL;
   size_t vl2 = 2 * vl;
@@ -373,17 +336,17 @@ void mlk_rv64v_poly_ntt(int16_t *r)
 #undef MLK_RVV_BFLY_FV
 
 /*************************************************
- * Name:		poly_invntt_tomont
+ * Name:        poly_invntt_tomont
  *
  * Description: Computes inverse of negacyclic number-theoretic transform (NTT)
- *				of a polynomial in place;
- *				inputs assumed to be in bitreversed order,
+ *              of a polynomial in place;
+ *              inputs assumed to be in bitreversed order,
  *output in normal order
  *
- * Arguments:	- uint16_t *r: pointer to in/output polynomial
+ * Arguments:   - uint16_t *r: pointer to in/output polynomial
  **************************************************/
 
-//	reverse butterfly operation
+/*  reverse butterfly operation */
 
 #define MLK_RVV_BFLY_RX(u0, u1, ut, uc, vl) \
   {                                         \
@@ -403,14 +366,14 @@ void mlk_rv64v_poly_ntt(int16_t *r)
 
 static vint16m2_t mlk_rv64v_intt2(vint16m2_t vp, vint16m1_t cz)
 {
-  size_t vl = MLK_RVV_E16M1_VL;  //__riscv_vsetvlmax_e16m1();
+  size_t vl = MLK_RVV_E16M1_VL;
   size_t vl2 = 2 * vl;
 
   const vuint16m2_t v2p8 = bitswap_perm(3, 4, vl2);
   const vuint16m2_t v2p4 = bitswap_perm(2, 4, vl2);
   const vuint16m2_t v2p2 = bitswap_perm(1, 4, vl2);
 
-  //	p0 = p2(p4(p8))
+  /*    p0 = p2(p4(p8)) */
   const vuint16m2_t v2p0 = __riscv_vrgather_vv_u16m2(
       __riscv_vrgather_vv_u16m2(v2p8, v2p4, vl2), v2p2, vl2);
 
@@ -424,14 +387,14 @@ static vint16m2_t mlk_rv64v_intt2(vint16m2_t vp, vint16m1_t cz)
 
   vint16m1_t t0, t1, c0, vt;
 
-  //	initial permute
+  /*    initial permute */
   vp = __riscv_vrgatherei16_vv_i16m2(vp, v2p0, vl2);
   t0 = __riscv_vget_v_i16m2_i16m1(vp, 0);
   t1 = __riscv_vget_v_i16m2_i16m1(vp, 1);
   c0 = __riscv_vrgather_vv_i16m1(cz, cs2, vl);
   MLK_RVV_BFLY_RV(t0, t1, vt, c0, vl);
 
-  //	swap 2
+  /*    swap 2  */
   vp = __riscv_vcreate_v_i16m1_i16m2(t0, t1);
   vp = __riscv_vrgatherei16_vv_i16m2(vp, v2p2, vl2);
   t0 = __riscv_vget_v_i16m2_i16m1(vp, 0);
@@ -439,7 +402,7 @@ static vint16m2_t mlk_rv64v_intt2(vint16m2_t vp, vint16m1_t cz)
   c0 = __riscv_vrgather_vv_i16m1(cz, cs4, vl);
   MLK_RVV_BFLY_RV(t0, t1, vt, c0, vl);
 
-  //	swap 4
+  /*    swap 4  */
   vp = __riscv_vcreate_v_i16m1_i16m2(t0, t1);
   vp = __riscv_vrgatherei16_vv_i16m2(vp, v2p4, vl2);
   t0 = __riscv_vget_v_i16m2_i16m1(vp, 0);
@@ -447,13 +410,13 @@ static vint16m2_t mlk_rv64v_intt2(vint16m2_t vp, vint16m1_t cz)
   c0 = __riscv_vrgather_vv_i16m1(cz, cs8, vl);
   MLK_RVV_BFLY_RV(t0, t1, vt, c0, vl);
 
-  //	swap 8
+  /*    swap 8  */
   vp = __riscv_vcreate_v_i16m1_i16m2(t0, t1);
   vp = __riscv_vrgatherei16_vv_i16m2(vp, v2p8, vl2);
   t0 = __riscv_vget_v_i16m2_i16m1(vp, 0);
   t1 = __riscv_vget_v_i16m2_i16m1(vp, 1);
 
-  //	normalize
+  /*    normalize   */
   t0 = fq_mulq_vx(t0, MLK_MONT_R1, vl);
   t1 = fq_mulq_vx(t1, MLK_MONT_R1, vl);
 
@@ -464,7 +427,8 @@ static vint16m2_t mlk_rv64v_intt2(vint16m2_t vp, vint16m1_t cz)
 
 void mlk_rv64v_poly_invntt_tomont(int16_t *r)
 {
-  // zetas can be compiled into vector constants; don't pass as a pointer
+  /* zetas can be compiled into vector constants; don't pass as a pointer */
+  /* check-magic: off */
   const int16_t izeta[0x80] = {
       -1044, 758,   1571,  205,   1275,  -677,  1065,  -448,  -1628, -1522,
       1460,  -958,  -991,  -996,  308,   108,   1517,  359,   -411,  1542,
@@ -480,8 +444,9 @@ void mlk_rv64v_poly_invntt_tomont(int16_t *r)
       -587,  -422,  -622,  171,   1325,  -573,  -1015, 552,   -652,  -1223,
       -105,  -1550, -871,  1251,  -843,  -555,  -430,  1103,
   };
+  /* check-magic: on */
 
-  size_t vl = MLK_RVV_E16M1_VL;  //__riscv_vsetvlmax_e16m1();
+  size_t vl = MLK_RVV_E16M1_VL;
   size_t vl2 = 2 * vl;
 
   const vint16m1_t z0 = __riscv_vle16_v_i16m1(&izeta[0x00], vl);
@@ -603,13 +568,14 @@ void mlk_rv64v_poly_invntt_tomont(int16_t *r)
 #undef MLK_RVV_BFLY_RX
 #undef MLK_RVV_BFLY_RV
 
-//	Kyber's middle field GF(3329)[X]/(X^2) multiplication
+/*  Kyber's middle field GF(3329)[X]/(X^2) multiplication   */
 
 static inline void mlk_rv64v_poly_basemul_mont_add_k(int16_t *r,
                                                      const int16_t *a,
                                                      const int16_t *b,
                                                      unsigned kn)
 {
+  /* check-magic: off */
   const int16_t roots[MLKEM_N] = {
       -1044, -1103, -1044, 1103,  -1044, 430,   -1044, -430,  -1044, 555,
       -1044, -555,  -1044, 843,   -1044, -843,  -1044, -1251, -1044, 1251,
@@ -638,8 +604,9 @@ static inline void mlk_rv64v_poly_basemul_mont_add_k(int16_t *r,
       -1044, 958,   -1044, -958,  -1044, -1460, -1044, 1460,  -1044, 1522,
       -1044, -1522, -1044, 1628,  -1044, -1628,
   };
+  /* check-magic: on */
 
-  size_t vl = MLK_RVV_E16M1_VL;  //__riscv_vsetvlmax_e16m1();
+  size_t vl = MLK_RVV_E16M1_VL;
   size_t i, j;
 
   const vuint16m1_t sw0 = __riscv_vxor_vx_u16m1(__riscv_vid_v_u16m1(vl), 1, vl);
@@ -678,7 +645,7 @@ static inline void mlk_rv64v_poly_basemul_mont_add_k(int16_t *r,
         ws = __riscv_vadd_vv_i32m2(ws, wa, vl);
       }
     }
-    //	the idea is to keep 32-bit intermediate result, reduce in the end
+    /*  the idea is to keep 32-bit intermediate result, reduce in the end */
     __riscv_vse16_v_i16m1(&r[i], fq_redc2(ws, vl), vl);
   }
 }
@@ -701,19 +668,19 @@ void mlk_rv64v_poly_basemul_mont_add_k4(int16_t *r, const int16_t *a,
   mlk_rv64v_poly_basemul_mont_add_k(r, a, b, 4 * MLKEM_N);
 }
 
-#endif /* (MLK_RVV_VLEN == 256) */
+#endif /* MLK_RVV_VLEN == 256 */
 
 /*************************************************
- * Name:		poly_tomont
+ * Name:        poly_tomont
  *
  * Description: Inplace conversion of all coefficients of a polynomial
- *				from normal domain to Montgomery domain
+ *              from normal domain to Montgomery domain
  *
- * Arguments:	- int16_t *r: pointer to input/output polynomial
+ * Arguments:   - int16_t *r: pointer to input/output polynomial
  **************************************************/
 void mlk_rv64v_poly_tomont(int16_t *r)
 {
-  size_t vl = MLK_RVV_E16M1_VL;  //__riscv_vsetvlmax_e16m1();
+  size_t vl = MLK_RVV_E16M1_VL;
 
   for (size_t i = 0; i < MLKEM_N; i += vl)
   {
@@ -724,17 +691,17 @@ void mlk_rv64v_poly_tomont(int16_t *r)
 }
 
 /*************************************************
- * Name:		poly_reduce
+ * Name:        poly_reduce
  *
  * Description: Applies Barrett reduction to all coefficients of a polynomial
- *				for details of the Barrett reduction see
+ *              for details of the Barrett reduction see
  *comments in reduce.c
  *
- * Arguments:	- int16_t *r: pointer to input/output polynomial
+ * Arguments:   - int16_t *r: pointer to input/output polynomial
  **************************************************/
 void mlk_rv64v_poly_reduce(int16_t *r)
 {
-  size_t vl = MLK_RVV_E16M1_VL;  //__riscv_vsetvlmax_e16m1();
+  size_t vl = MLK_RVV_E16M1_VL;
   vint16m1_t vt;
 
   for (size_t i = 0; i < MLKEM_N; i += vl)
@@ -742,24 +709,24 @@ void mlk_rv64v_poly_reduce(int16_t *r)
     vt = __riscv_vle16_v_i16m1(&r[i], vl);
     vt = fq_barrett(vt, vl);
 
-    //	make positive for ml-kem native
+    /*  make positive */
     vt = fq_cadd(vt, vl);
     __riscv_vse16_v_i16m1(&r[i], vt, vl);
   }
 }
 
 /*************************************************
- * Name:		poly_add
+ * Name:        poly_add
  *
  * Description: Add two polynomials; no modular reduction is performed
  *
  * Arguments: - int16_t *r: pointer to output polynomial
- *			  - const int16_t *a: pointer to first input polynomial
- *			  - const int16_t *b: pointer to second input polynomial
+ *            - const int16_t *a: pointer to first input polynomial
+ *            - const int16_t *b: pointer to second input polynomial
  **************************************************/
 void mlk_rv64v_poly_add(int16_t *r, const int16_t *a, const int16_t *b)
 {
-  size_t vl = MLK_RVV_E16M1_VL;  //__riscv_vsetvlmax_e16m1();
+  size_t vl = MLK_RVV_E16M1_VL;
 
   for (size_t i = 0; i < MLKEM_N; i += vl)
   {
@@ -772,17 +739,17 @@ void mlk_rv64v_poly_add(int16_t *r, const int16_t *a, const int16_t *b)
 }
 
 /*************************************************
- * Name:		poly_sub
+ * Name:        poly_sub
  *
  * Description: Subtract two polynomials; no modular reduction is performed
  *
- * Arguments: - int16_t *r:	   pointer to output polynomial
- *			  - const int16_t *a: pointer to first input polynomial
- *			  - const int16_t *b: pointer to second input polynomial
+ * Arguments: - int16_t *r:    pointer to output polynomial
+ *            - const int16_t *a: pointer to first input polynomial
+ *            - const int16_t *b: pointer to second input polynomial
  **************************************************/
 void mlk_rv64v_poly_sub(int16_t *r, const int16_t *a, const int16_t *b)
 {
-  size_t vl = MLK_RVV_E16M1_VL;  //__riscv_vsetvlmax_e16m1();
+  size_t vl = MLK_RVV_E16M1_VL;
 
   for (size_t i = 0; i < MLKEM_N; i += vl)
   {
@@ -794,13 +761,12 @@ void mlk_rv64v_poly_sub(int16_t *r, const int16_t *a, const int16_t *b)
   }
 }
 
-// Description: Run rejection sampling on uniform random bytes to generate
-//				uniform random integers mod q
+/*  Run rejection sampling to get uniform random integers mod q  */
 
 unsigned int mlk_rv64v_rej_uniform(int16_t *r, unsigned int len,
                                    const uint8_t *buf, unsigned int buflen)
 {
-  const size_t vl = MLK_RVV_E16M1_VL;  //__riscv_vsetvlmax_e16m1();
+  const size_t vl = MLK_RVV_E16M1_VL;
   const size_t vl23 = (MLK_RVV_E16M1_VL * 24) / 32;
 
   const vuint16m1_t vid = __riscv_vid_v_u16m1(vl);
@@ -840,9 +806,15 @@ unsigned int mlk_rv64v_rej_uniform(int16_t *r, unsigned int len,
   return ctr;
 }
 
-#undef MLKEM_QI    /* 3327 */
-#undef MLK_MONT_R1 /* 2285 */
-#undef MLK_MONT_R2 /* 1353 */
-#undef MLK_MONT_NR /* 1441 */
+#else /* MLK_ARITH_BACKEND_RISCV64 */
 
-#endif /* MLK_ARITH_BACKEND_RISCV64 */
+MLK_EMPTY_CU(rv64v_poly)
+
+#endif /* !MLK_ARITH_BACKEND_RISCV64 */
+
+/* To facilitate single-compilation-unit (SCU) builds, undefine all macros.
+ * Don't modify by hand -- this is auto-generated by scripts/autogen. */
+#undef MLK_RVV_BFLY_FX
+#undef MLK_RVV_BFLY_FV
+#undef MLK_RVV_BFLY_RX
+#undef MLK_RVV_BFLY_RV

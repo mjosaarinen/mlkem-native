@@ -23,6 +23,7 @@ else ifneq ($(findstring x86_64, $(CROSS_PREFIX)),)
 	CFLAGS += -mavx2 -mbmi2 -mpopcnt -maes
 	CFLAGS += -DMLK_FORCE_X86_64
 else ifneq ($(findstring riscv64, $(CROSS_PREFIX)),)
+	CFLAGS += -march=rv64gcv_zvl256b
 	CFLAGS += -DMLK_FORCE_RISCV64
 else
 endif
@@ -36,6 +37,7 @@ else ifneq ($(findstring x86_64, $(CROSS_PREFIX)),)
 else ifneq ($(findstring aarch64, $(CROSS_PREFIX)),)
 	CFLAGS += -DMLK_FORCE_AARCH64
 else ifneq ($(findstring riscv64, $(CROSS_PREFIX)),)
+	CFLAGS += -march=rv64gcv_zvl256b
 	CFLAGS += -DMLK_FORCE_RISCV64
 else
 endif
